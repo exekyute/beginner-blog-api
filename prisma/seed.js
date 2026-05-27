@@ -1,55 +1,74 @@
-// Prisma schema: the single source of truth for the database.
-// After editing, run `npx prisma migrate dev --name <change>` to generate SQL.
+// Seeds the database with fake users, posts, and comments. Safe to re-run:
+// it wipes existing data first so the result is deterministic.
+//
+// Run with: npm run prisma:seed
+// All seeded users share the password: password123
 
-generator client {
-  provider = "prisma-client-js"
+require('dotenv').config();
+const bcrypt = require('bcrypt');
+const { faker } = require('@faker-js/faker');
+const prisma = require('../src/config/prisma');
+
+const USERS = 5;
+const POSTS = 20;
+const COMMENTS = 50;
+
+async function main() {
+  console.log('Clearing existing data...');
+  // onDelete: Cascade in the schema would handle this, but doing it explicitly
+  // makes the seed faster to reason about.
+  await prisma.comment.deleteMany();
+  await prisma.post.deleteMany();
+  await prisma.user.deleteMany();
+
+  console.log(`Creating ${USERS} users...`);
+  const passwordHash = await bcrypt.hash('password123', 10);
+  const users = [];
+  for (let i = 0; i < USERS; i++) {
+    users.push(
+      await prisma.user.create({
+        data: {
+          email: `user${i}_${faker.internet.email().toLowerCase()}`,
+          username: `${faker.internet.userName().toLowerCase()}_${i}`,
+          passwordHash,
+        },
+      })
+    );
+  }
+
+  console.log(`Creating ${POSTS} posts...`);
+  const posts = [];
+  for (let i = 0; i < POSTS; i++) {
+    posts.push(
+      await prisma.post.create({
+        data: {
+          title: faker.lorem.sentence({ min: 4, max: 8 }),
+          content: faker.lorem.paragraphs({ min: 2, max: 5 }, '\n\n'),
+          authorId: faker.helpers.arrayElement(users).id,
+        },
+      })
+    );
+  }
+
+  console.log(`Creating ${COMMENTS} comments...`);
+  for (let i = 0; i < COMMENTS; i++) {
+    await prisma.comment.create({
+      data: {
+        content: faker.lorem.sentences({ min: 1, max: 3 }),
+        postId: faker.helpers.arrayElement(posts).id,
+        authorId: faker.helpers.arrayElement(users).id,
+      },
+    });
+  }
+
+  console.log('Seed complete. Login with any seeded email / password123');
 }
 
-datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
-}
-
-model User {
-  id           String    @id @default(uuid())
-  email        String    @unique
-  username     String    @unique
-  // Stored as a bcrypt hash. The plain password never reaches the database.
-  passwordHash String
-  createdAt    DateTime  @default(now())
-
-  posts        Post[]
-  comments     Comment[]
-}
-
-model Post {
-  id        String    @id @default(uuid())
-  title     String
-  content   String
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-
-  authorId  String
-  // onDelete: Cascade -- deleting a user removes their posts automatically.
-  author    User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
-
-  comments  Comment[]
-
-  @@index([authorId])
-  @@index([createdAt])
-}
-
-model Comment {
-  id        String   @id @default(uuid())
-  content   String
-  createdAt DateTime @default(now())
-
-  postId    String
-  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
-
-  authorId  String
-  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
-
-  @@index([postId])
-  @@index([authorId])
-}
+main()
+  .catch((err) => {
+    console.error(err);
+    process.exit(1);
+  })
+  .finally(async () => {
+    await prisma.$disconnect();
+  });
